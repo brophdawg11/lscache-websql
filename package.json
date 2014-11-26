@@ -1,15 +1,15 @@
 {
-  "name": "lscache",
-  "title": "lscache",
-  "description": "A simple library that emulates memcache functions using HTML5 localStorage",
-  "author": "Pamela Fox",
+  "name": "lscache-websql",
+  "title": "lscache-websql",
+  "description": "A simple library that emulates memcache functions using HTML5 Websql",
+  "author": "Matt Brophy",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pamelafox/lscache.git"
+    "url": "https://github.com/brophdawg11/lscache-websql.git"
   },
-  "homepage": "http://github.com/pamelafox/lscache",
-  "main": "lscache",
-  "version": "1.0.2",
+  "homepage": "https://github.com/brophdawg11/lscache-websql",
+  "main": "lscache-websql",
+  "version": "0.0.1",
   "devDependencies": {
     "grunt": "~0.4.1",
     "grunt-cli": "~0.1.13",

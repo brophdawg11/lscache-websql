@@ -1,10 +1,9 @@
 {
-	"name": "lscache",
-	"version": "1.0.2",
-	"homepage": "https://github.com/pamelafox/lscache",
-	"main": ["lscache.min.js", "lscache.js"],
+	"name": "lscache-websql",
+	"version": "0.0.1",
+	"homepage": "https://github.com/brophdawg11/lscache-websql",
+	"main": ["lscache-websql.min.js", "lscache-websql.js"],
 	"ignore": [
-		"demo",
 		"tests",
 		"Gruntfile.js",
 		"package.json"
@@ -13,6 +12,7 @@
 		"localstorage",
 		"local",
 		"storage",
-		"lscache"
+		"lscache",
+    "websql"
 	]
 }

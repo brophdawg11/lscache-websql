@@ -3,12 +3,12 @@ module.exports = function(grunt) {
   grunt.initConfig({
 
     jshint: {
-      files: ["lscache.js", "./tests/tests.js"],
+      files: ["lscache-websql.js", "./tests/tests.js"],
     },
     uglify: {
       dist: {
-        src: ["lscache.js"],
-        dest: "lscache.min.js"
+        src: ["lscache-websql.js"],
+        dest: "lscache-websql.min.js"
       }
     },
     bump: {
