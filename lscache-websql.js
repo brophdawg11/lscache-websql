@@ -1,8 +1,9 @@
 /**
- * lscache library
- * Copyright (c) 2011, Pamela Fox
+ * lscache-websql library
+ * Copyright (c) 2014, Matt Brophy
  *
- * 6/6/2014 - isExpired/skipRemove/allowExpired additions by matt@brophy.org
+ * Largely inspired by Pamela Fox's lscache library
+ *   https://github.com/pamelafox/lscache
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,12 +30,9 @@
         module.exports = factory();
     } else {
         // Browser globals
-        root.lscache = factory();
+        root.lscacheWebsql = factory();
     }
 }(this, function () {
-
-  // Prefix for all lscache keys
-  var CACHE_PREFIX = 'lscache-';
 
   // Suffix for the key name on the expiration items in localStorage
   var CACHE_SUFFIX = '-cacheexpiration';
@@ -50,30 +48,66 @@
 
   var cachedStorage;
   var cachedJSON;
-  var cacheBucket = '';
   var warnings = false;
 
-  // Determines if localStorage is supported in the browser;
-  // result is cached for better performance instead of being run each time.
-  // Feature detection is based on how Modernizr does it;
-  // it's not straightforward due to FF4 issues.
-  // It's not run at parse-time as it takes 200ms in Android.
-  function supportsStorage() {
-    var key = '__lscachetest__';
-    var value = key;
+  var dbName = '__lscache-websql__';
+  var dbVersion = '1.0';
+  var dbDesc = 'lscache-websql db';
+  var dbSize = 10 * 1024 * 1024;
+  var db;
 
-    if (cachedStorage !== undefined) {
-      return cachedStorage;
-    }
+  var tblName = 'data';
 
-    try {
-      setItem(key, value);
-      removeItem(key);
-      cachedStorage = true;
-    } catch (exc) {
-      cachedStorage = false;
-    }
-    return cachedStorage;
+  var supportedDfd = new $.Deferred();
+
+  function partial(func) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return function () {
+      var args2 = Array.prototype.slice.call(arguments, 0);
+      return func.apply(null, args.concat(args2));
+    };
+  }
+
+  function dropTable() {
+    return executeTx('DROP TABLE ' + tblName, [])
+             .then(function (tx, val) {
+               return new $.Deferred().resolve(tx, val);
+             },
+             function (tx, err) {
+               return new $.Deferred().resolve(tx, null);
+             });
+  }
+
+  function createTable() {
+    return executeTx('CREATE TABLE ' + tblName + ' (key unique, val)');
+  }
+
+  // Check support and init
+  if (!('openDatabase' in window)) {
+    supportedDfd.reject('openDatabase not defined!');
+  } else {
+    db = openDatabase(dbName, dbVersion, dbDesc, dbSize);
+    dropTable().then(createTable)
+               .done(supportedDfd.resolve)
+               .fail(supportedDfd.reject);
+  }
+
+  function executeTx(sql, paramArr) {
+    var dfd = new $.Deferred();
+    warn('Executing sql: ' + sql);
+    warn(paramArr);
+    db.transaction(function (tx) {
+      tx.executeSql(sql, paramArr,
+                    function (tx, result) {
+                      dfd.resolve(result);
+                    },
+                    function (tx, err) {
+                      dfd.reject(err);
+                    });
+    });
+    return dfd.promise().fail(function (e) {
+      warn('tx.executeSql failed: ' + e.message);
+    });
   }
 
   // Determines if native JSON (de-)serialization is supported in the browser.
@@ -106,18 +140,25 @@
    * Wrapper functions for localStorage methods
    */
 
-  function getItem(key) {
-    return localStorage.getItem(CACHE_PREFIX + cacheBucket + key);
+  function getItem(key, cb) {
+    var func = partial(executeTx,
+                       'SELECT val FROM ' + tblName + ' WHERE key = ?',
+                       [ key ]);
+    return supportedDfd.then(func);
   }
 
-  function setItem(key, value) {
-    // Fix for iPad issue - sometimes throws QUOTA_EXCEEDED_ERR on setItem.
-    localStorage.removeItem(CACHE_PREFIX + cacheBucket + key);
-    localStorage.setItem(CACHE_PREFIX + cacheBucket + key, value);
+  function setItem(key, value, cb) {
+    var func = partial(executeTx,
+                       'INSERT INTO ' + tblName + ' (key, val) VALUES (?, ?)',
+                       [ key, value ]);
+    return supportedDfd.then(func);
   }
 
   function removeItem(key) {
-    localStorage.removeItem(CACHE_PREFIX + cacheBucket + key);
+    var func = partial(executeTx,
+                       'DELETE FROM ' + tblName + ' WHERE key = ?',
+                       [ key ]);
+    return supportedDfd.then(func);
   }
 
   function warn(message, err) {
@@ -127,7 +168,7 @@
     if (err) window.console.warn("lscache - The error was: " + err.message);
   }
 
-  var lscache = {
+  var lscacheWebsql = {
     /**
      * Stores the value in localStorage. Expires after specified number of minutes.
      * @param {string} key
@@ -135,82 +176,99 @@
      * @param {number} time
      */
     set: function(key, value, time) {
-      if (!supportsStorage()) return;
+      return supportedDfd.then(function () {
 
-      // If we don't get a string value, try to stringify
-      // In future, localStorage may properly support storing non-strings
-      // and this can be removed.
-      if (typeof value !== 'string') {
-        if (!supportsJSON()) return;
-        try {
-          value = JSON.stringify(value);
-        } catch (e) {
-          // Sometimes we can't stringify due to circular refs
-          // in complex objects, so we won't bother storing then.
-          return;
+        function setExpiration(results) {
+          // If a time is specified, store expiration info in localStorage
+          if (time) {
+            return setItem(expirationKey(key), (currentTime() + time).toString(EXPIRY_RADIX))
+                   // Return the prior answer after we set the expiration
+                   .then(function () {
+                     return results;
+                   })
+                   // Otherwise remove the item we just set since we failed to
+                   // set an expiration.  Use .fail() to preserve the error result
+                   .fail(function () {
+                     return removeItem(key);
+                   })
+          } else {
+            // In case they previously set a time, remove that info from localStorage.
+            return new $.Deferred()
+                        .resolve(results)
+                        .done(function () {
+                          return removeItem(expirationKey(key))
+                        });
+          }
         }
-      }
 
-      try {
-        setItem(key, value);
-      } catch (e) {
-        if (e.name === 'QUOTA_EXCEEDED_ERR' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.name === 'QuotaExceededError') {
-          // If we exceeded the quota, then we will sort
-          // by the expire time, and then remove the N oldest
-          var storedKeys = [];
-          var storedKey;
-          for (var i = 0; i < localStorage.length; i++) {
-            storedKey = localStorage.key(i);
-
-            if (storedKey.indexOf(CACHE_PREFIX + cacheBucket) === 0 && storedKey.indexOf(CACHE_SUFFIX) < 0) {
-              var mainKey = storedKey.substr((CACHE_PREFIX + cacheBucket).length);
-              var exprKey = expirationKey(mainKey);
-              var expiration = getItem(exprKey);
-              if (expiration) {
-                expiration = parseInt(expiration, EXPIRY_RADIX);
-              } else {
-                // TODO: Store date added for non-expiring items for smarter removal
-                expiration = MAX_DATE;
-              }
-              storedKeys.push({
-                key: mainKey,
-                size: (getItem(mainKey)||'').length,
-                expiration: expiration
-              });
-            }
-          }
-          // Sorts the keys with oldest expiration time last
-          storedKeys.sort(function(a, b) { return (b.expiration-a.expiration); });
-
-          var targetSize = (value||'').length;
-          while (storedKeys.length && targetSize > 0) {
-            storedKey = storedKeys.pop();
-            warn("Cache is full, removing item with key '" + key + "'");
-            removeItem(storedKey.key);
-            removeItem(expirationKey(storedKey.key));
-            targetSize -= storedKey.size;
-          }
+        // If we don't get a string value, try to stringify
+        // In future, localStorage may properly support storing non-strings
+        // and this can be removed.
+        if (typeof value !== 'string') {
+          if (!supportsJSON()) return;
           try {
-            setItem(key, value);
+            value = JSON.stringify(value);
           } catch (e) {
-            // value may be larger than total quota
-            warn("Could not add item with key '" + key + "', perhaps it's too big?", e);
+            // Sometimes we can't stringify due to circular refs
+            // in complex objects, so we won't bother storing then.
             return;
           }
-        } else {
-          // If it was some other error, just give up.
-          warn("Could not add item with key '" + key + "'", e);
-          return;
         }
-      }
 
-      // If a time is specified, store expiration info in localStorage
-      if (time) {
-        setItem(expirationKey(key), (currentTime() + time).toString(EXPIRY_RADIX));
-      } else {
-        // In case they previously set a time, remove that info from localStorage.
-        removeItem(expirationKey(key));
-      }
+        try {
+          return setItem(key, value).then(setExpiration);
+        } catch (e) {
+          // if (e.name === 'QUOTA_EXCEEDED_ERR' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.name === 'QuotaExceededError') {
+          //   // If we exceeded the quota, then we will sort
+          //   // by the expire time, and then remove the N oldest
+          //   var storedKeys = [];
+          //   var storedKey;
+          //   for (var i = 0; i < localStorage.length; i++) {
+          //     storedKey = localStorage.key(i);
+
+          //     if (storedKey.indexOf(CACHE_PREFIX + cacheBucket) === 0 && storedKey.indexOf(CACHE_SUFFIX) < 0) {
+          //       var mainKey = storedKey.substr((CACHE_PREFIX + cacheBucket).length);
+          //       var exprKey = expirationKey(mainKey);
+          //       var expiration = getItem(exprKey);
+          //       if (expiration) {
+          //         expiration = parseInt(expiration, EXPIRY_RADIX);
+          //       } else {
+          //         // TODO: Store date added for non-expiring items for smarter removal
+          //         expiration = MAX_DATE;
+          //       }
+          //       storedKeys.push({
+          //         key: mainKey,
+          //         size: (getItem(mainKey)||'').length,
+          //         expiration: expiration
+          //       });
+          //     }
+          //   }
+          //   // Sorts the keys with oldest expiration time last
+          //   storedKeys.sort(function(a, b) { return (b.expiration-a.expiration); });
+
+          //   var targetSize = (value||'').length;
+          //   while (storedKeys.length && targetSize > 0) {
+          //     storedKey = storedKeys.pop();
+          //     warn("Cache is full, removing item with key '" + key + "'");
+          //     removeItem(storedKey.key);
+          //     removeItem(expirationKey(storedKey.key));
+          //     targetSize -= storedKey.size;
+          //   }
+          //   try {
+          //     setItem(key, value);
+          //   } catch (e) {
+          //     // value may be larger than total quota
+          //     warn("Could not add item with key '" + key + "', perhaps it's too big?", e);
+          //     return;
+          //   }
+          // } else {
+          //   // If it was some other error, just give up.
+             warn("Could not add item with key '" + key + "'", e);
+             return new $.Deferred().reject("Could not add item with key '" + key + "'");
+          //   return;
+          // }
+        }
+      });
     },
 
     /**
@@ -219,21 +277,24 @@
      * @return {Boolean}
      */
     isExpired: function(key) {
-      if (!supportsStorage()) return null;
+      return supportedDfd.then(function () {
+        var exprKey = expirationKey(key);
+        return getItem(exprKey).then(function (sqlResultSet) {
+          try {
+            var expr = sqlResultSet.rows.item(0)['val'];
+            if (expr) {
+              var expirationTime = parseInt(expr, EXPIRY_RADIX);
 
-      var exprKey = expirationKey(key);
-      var expr = getItem(exprKey);
+              // Check if we should actually kick item out of storage
+              if (currentTime() >= expirationTime) {
+                return true;
+              }
+            }
+          } catch (e) {}
 
-      if (expr) {
-        var expirationTime = parseInt(expr, EXPIRY_RADIX);
-
-        // Check if we should actually kick item out of storage
-        if (currentTime() >= expirationTime) {
-          return true;
-        }
-      }
-
-      return false;
+          return false;
+        });
+      });
     },
 
     /**
@@ -244,38 +305,62 @@
      * @return {string|Object}
      */
     get: function(key, skipRemove, allowExpired) {
-      if (!supportsStorage()) return null;
-
-      var value;
-
       skipRemove = (skipRemove === true);  // Default false
       allowExpired = (allowExpired === true); // Default false
 
-      if (lscache.isExpired(key)) {
-        if (!skipRemove) {
-          var exprKey = expirationKey(key);
-          value = getItem(key);  // Cache in case allowExpired is also true!
-          removeItem(key);
-          removeItem(exprKey);
-        }
-        if (!allowExpired) {
-          return null;
-        }
-      }
+      return supportedDfd.then(function () {
 
-      // Tries to de-serialize stored value if its an object, and returns the normal value otherwise.
-      if (!value) { value = getItem(key); }
-      if (!value || !supportsJSON()) {
-        return value;
-      }
+        return lscacheWebsql.isExpired(key).then(function (expired) {
+          var value = new $.Deferred(),
+              dfd = new $.Deferred().resolve();
 
-      try {
-        // We can't tell if its JSON or a string, so we try to parse
-        return JSON.parse(value);
-      } catch (e) {
-        // If we can't parse, it's probably because it isn't an object
-        return value;
-      }
+          if (expired) {
+            if (!skipRemove) {
+              var exprKey = expirationKey(key);
+              dfd = dfd.then(function () {
+                      return getItem(key).then(value.resolve, value.reject);
+                    })
+                    .then(function (v) {
+                      return removeItem(key);
+                    })
+                    .then(function (value) {
+                      return removeItem(exprKey);
+                    });
+            }
+            if (!allowExpired) {
+              return null;
+            }
+          }
+
+          // Tries to de-serialize stored value if its an object, and returns the normal value otherwise.
+          dfd = dfd.then(function () {
+
+            function parseValue (sqlResultSet) {
+              var value = null;
+
+              try {
+                value = sqlResultSet.rows.item(0)['val'];
+                if (!value || !supportsJSON()) {
+                  return value;
+                }
+                // We can't tell if its JSON or a string, so we try to parse
+                return JSON.parse(value);
+              } catch (e) {
+                // If we can't parse, it's probably because it isn't an object
+                return value;
+              }
+            }
+
+            if (value.state() === 'pending') {
+              return getItem(key).then(parseValue);
+            } else {
+              return value.then(parseValue);
+            }
+          });
+
+          return dfd.promise();
+        });
+      });
     },
 
     /**
@@ -284,9 +369,13 @@
      * @param {string} key
      */
     remove: function(key) {
-      if (!supportsStorage()) return null;
-      removeItem(key);
-      removeItem(expirationKey(key));
+      return supportedDfd
+              .then(function () {
+                removeItem(key);
+              })
+              .then(function () {
+                removeItem(expirationKey(key));
+              });
     },
 
     /**
@@ -295,37 +384,21 @@
      * @return {boolean}
      */
     supported: function() {
-      return supportsStorage();
+      return supportedDfd
+              .then(function () {
+                      return true;
+                    },
+                    function () {
+                      return false;
+                    });
     },
 
     /**
      * Flushes all lscache items and expiry markers without affecting rest of localStorage
      */
-    flush: function() {
-      if (!supportsStorage()) return;
-
-      // Loop in reverse as removing items will change indices of tail
-      for (var i = localStorage.length-1; i >= 0 ; --i) {
-        var key = localStorage.key(i);
-        if (key.indexOf(CACHE_PREFIX + cacheBucket) === 0) {
-          localStorage.removeItem(key);
-        }
-      }
-    },
-
-    /**
-     * Appends CACHE_PREFIX so lscache will partition data in to different buckets.
-     * @param {string} bucket
-     */
-    setBucket: function(bucket) {
-      cacheBucket = bucket;
-    },
-
-    /**
-     * Resets the string being appended to CACHE_PREFIX so lscache will use the default storage behavior.
-     */
-    resetBucket: function() {
-      cacheBucket = '';
+    flush: function(cb) {
+      return supportedDfd
+              .then(partial(executeTx, 'DELETE FROM ' + tblName, []));
     },
 
     /**
@@ -337,5 +410,5 @@
   };
 
   // Return the module
-  return lscache;
+  return lscacheWebsql;
 }));
