@@ -5,7 +5,7 @@ This is a simple library that provides an [**lscache**](https://github.com/pamel
 #### Dependencies
 * jQuery - For now, for it's Deferred implementation.  The hope is to remove this dependency in the future :)
 
-[Unit Tests](https://rawgithub.com/brophdawg11/lscache-websql/master/tests.html)
+[Unit Tests](https://rawgithub.com/brophdawg11/lscache-websql/master/tests/test.html)
 
 Methods
 -------
