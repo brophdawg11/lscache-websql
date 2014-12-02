@@ -180,67 +180,67 @@ var startTests = function (lscacheWebsql) {
   // });
 
   // We do these tests last since they must wait 1 minute each
-  // asyncTest('Test isExpired() function', function () {
-  //   var key = 'thekey',
-  //       value = 'thevalue',
-  //       a = new Automator();
+  asyncTest('Test isExpired() function with 1 minute expiration time', function () {
+    var key = 'thekey',
+        value = 'thevalue',
+        a = new Automator();
 
-  //   a.automate([ partial(lscacheWebsql.set, key, value, 1),
-  //                61 * 1000,
-  //                partial(lscacheWebsql.isExpired, key),
-  //                partial(assertVal, true),
-  //                start ]);
-  // });
+    a.automate([ partial(lscacheWebsql.set, key, value, 1),
+                 61 * 1000,
+                 partial(lscacheWebsql.isExpired, key),
+                 partial(assertVal, true),
+                 start ]);
+  });
 
-  // asyncTest('Testing set() and get() with string and expiration', function () {
-  //   var key = 'thekey',
-  //       value = 'thevalue',
-  //       a = new Automator();
+  asyncTest('Testing set() and get() with string and 1 minute expiration time', function () {
+    var key = 'thekey',
+        value = 'thevalue',
+        a = new Automator();
 
-  //   a.automate([ partial(lscacheWebsql.set, key, value, 1),
+    a.automate([ partial(lscacheWebsql.set, key, value, 1),
 
-  //                // Should be valid after 1 seconds
-  //                1 * 1000,
-  //                partial(lscacheWebsql.get, key),
-  //                partial(assertVal, value),
+                 // Should be valid after 1 seconds
+                 1 * 1000,
+                 partial(lscacheWebsql.get, key),
+                 partial(assertVal, value),
 
-  //                // Should be invalid after 61 seconds
-  //                60 * 1000,
-  //                partial(lscacheWebsql.get, key),
-  //                partial(assertVal, null),
-  //                start ]);
-  // });
+                 // Should be invalid after 61 seconds
+                 60 * 1000,
+                 partial(lscacheWebsql.get, key),
+                 partial(assertVal, null),
+                 start ]);
+  });
 
-  // asyncTest('Test get() skipRemove/allowExpired parameters', function () {
-  //   var key = 'thekey',
-  //       value = 'thevalue',
-  //       a = new Automator();
+  asyncTest('Test get() skipRemove/allowExpired parameters with 1 minute expiration time', function () {
+    var key = 'thekey',
+        value = 'thevalue',
+        a = new Automator();
 
-  //   a.automate([ partial(lscacheWebsql.set, key, value, 1),
-  //                61 * 1000,
+    a.automate([ partial(lscacheWebsql.set, key, value, 1),
+                 61 * 1000,
 
-  //                // Include skipRemove parameter.  Should return null but
-  //                // leave the value in the db
-  //                partial(lscacheWebsql.get, key, true),
-  //                partial(assertVal, null),
+                 // Include skipRemove parameter.  Should return null but
+                 // leave the value in the db
+                 partial(lscacheWebsql.get, key, true),
+                 partial(assertVal, null),
 
-  //                // Include skipRemove and allowExpired.  Should return the
-  //                // expired value and leave it in the db
-  //                partial(lscacheWebsql.get, key, true, true),
-  //                partial(assertVal, value),
+                 // Include skipRemove and allowExpired.  Should return the
+                 // expired value and leave it in the db
+                 partial(lscacheWebsql.get, key, true, true),
+                 partial(assertVal, value),
 
-  //                // Call with allowExpired but without skipRemove.  Should
-  //                // return the expired value and remove it
-  //                partial(lscacheWebsql.get, key, false, true),
-  //                partial(assertVal, value),
+                 // Call with allowExpired but without skipRemove.  Should
+                 // return the expired value and remove it
+                 partial(lscacheWebsql.get, key, false, true),
+                 partial(assertVal, value),
 
-  //                // Call normally, should return null because the item was
-  //                // deleted last call
-  //                partial(lscacheWebsql.get, key),
-  //                partial(assertVal, null),
+                 // Call normally, should return null because the item was
+                 // deleted last call
+                 partial(lscacheWebsql.get, key),
+                 partial(assertVal, null),
 
-  //                start ]);
-  // });
+                 start ]);
+  });
 
   if (QUnit.config.autostart === false) {
     QUnit.start();
