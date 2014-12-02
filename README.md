@@ -1,163 +1,115 @@
-lscache
+lscache-websql
 ===============================
-This is a simple library that emulates `memcache` functions using HTML5 `localStorage`, so that you can cache data on the client
-and associate an expiration time with each piece of data. If the `localStorage` limit (~5MB) is exceeded, it tries to create space by removing the items that are closest to expiring anyway. If `localStorage` is not available at all in the browser, the library degrades by simply not caching and all cache requests return null.
+This is a simple library that provides an [**lscache**](https://github.com/pamelafox/lscache)-like API (using WebSQL instead of localStorage) so that you can cache data on the client and associate an expiration time with each piece of data.  It also provides the additional parameters and functions added by this [fork](https://github.com/brophdawg11/lscache) of the lscache library.  If WebSQL is not supported by the browser, the library degrades by simply not caching and all cache requests return null.
+
+#### Dependencies
+* jQuery - For now, for it's Deferred implementation.  The hope is to remove this dependency in the future :)
+
+[Unit Tests](https://rawgithub.com/brophdawg11/lscache-websql/master/tests.html)
 
 Methods
 -------
 
-The library exposes 5 methods: `set()`, `get()`, `remove()`, `flush()`, and `setBucket()`.
+The library exposes 5 methods: `set()`, `get()`, `remove()`, `flush()`, and `isExpired`.
 
 * * *
 
-### lscache.set
-Stores the value in localStorage. Expires after specified number of minutes.
-#### Arguments
+### lscacheWebsql.set(key, value, mins)
+Stores the value. Expires after specified number of minutes.
+##### Arguments
 1. `key` (**string**)
 2. `value` (**Object|string**)
-3. `time` (**number: optional**)
+3. `mins` (**number: optional**)
 
+##### Returns
+jQuery.Promise to be resolved upon success, or rejected upon failure
 * * *
 
-### lscache.get
+### lscacheWebsql.get(key, skipRemove, allowExpired)
 Retrieves specified value from localStorage, if not expired.
-#### Arguments
+##### Arguments
 1. `key` (**string**)
-#### Returns
-**string | Object** : The stored value.
+2. `skipRemove` (**boolean**) - Skip automatic deletion of a key/value pair if it has expired (default `false`)
+3. `allowExpired` (**boolean**) - Allow expired values to be returned (default `false`)
+
+##### Returns
+jQuery.Promise to be resolved with the stored value, or rejected upon failure.  Returned values are attempted to be parsed back to their original form using JSON.parse()
 
 * * *
 
-### lscache.remove
+### lscacheWebsql.remove(key)
 Removes a value from localStorage.
-#### Arguments
+##### Arguments
 1. `key` (**string**)
 
-* * *
-
-### lscache.flush
-Removes all lscache items from localStorage without affecting other data.
+##### Returns
+jQuery.Promise to be resolved upon success, or rejected upon failure
 
 * * *
 
-### lscache.setBucket
-Appends CACHE_PREFIX so lscache will partition data in to different buckets
-#### Arguments
-1. `bucket` (**string**)
+### lscacheWebsql.flush()
+Removes all items from webSql without affecting other data.
+
+##### Returns
+jQuery.Promise to be resolved upon success, or rejected upon failure
+
+* * *
 
 Usage
 -------
 
 The interface should be familiar to those of you who have used `memcache`, and should be easy to understand for those of you who haven't.
 
-For example, you can store a string for 2 minutes using `lscache.set()`:
+For example, you can store a string for 2 minutes using `lscacheWebsql.set()`:
 
 ```js
-lscache.set('greeting', 'Hello World!', 2);
+lscacheWebSql.set('greeting', 'Hello World!', 2)
+             .done(function() { console.log('Woohoo!'); })
+             .fail(function(e) { console.error('Uh oh: ' + e); }
 ```
 
-You can then retrieve that string with `lscache.get()`:
+You can then retrieve that string with `lscacheWebsql.get()`:
 
 ```js
-alert(lscache.get('greeting'));
+lscacheWebsql.get('greeting')
+             .done(function(val) { console.log(val); })
+             .fail(function(e) { console.error('Uh oh: ' + e); }
 ```
 
-You can remove that string from the cache entirely with `lscache.remove()`:
+You can remove that string from the cache entirely with `lscacheWebsql.remove()`:
 
 ```js
-lscache.remove('greeting');
+lscacheWebsql.remove('greeting')
+             .done(function() { console.log('Woohoo!'); })
+             .fail(function(e) { console.error('Uh oh: ' + e); }
 ```
 
-You can remove all items from the cache entirely with `lscache.flush()`:
+You can remove all items from the cache entirely with `lscacheWebsql.flush()`:
 
 ```js
-lscache.flush();
+lscacheWebsql.flush();
+             .done(function() { console.log('Woohoo!'); })
+             .fail(function(e) { console.error('Uh oh: ' + e); }
 ```
 
 The library also takes care of serializing objects, so you can store more complex data:
 
 ```js
-lscache.set('data', {'name': 'Pamela', 'age': 26}, 2);
+lscacheWebsql.set('data', {'name': 'Pamela', 'age': 26}, 2);
 ```
 
 And then when you retrieve it, you will get it back as an object:
 
 ```js
-alert(lscache.get('data').name);
-```
-
-If you have multiple instances of lscache running on the same domain, you can partition data in a certain bucket via:
-
-```js
-lscache.set('response', '...', 2);
-lscache.setBucket('lib');
-lscache.set('path', '...', 2);
-lscache.flush(); //only removes 'path' which was set in the lib bucket
-```
-
-For more live examples, play around with the demo here:
-http://pamelafox.github.com/lscache/demo.html
-
-
-Real-World Usage
-----------
-This library was originally developed with the use case of caching results of JSON API queries
-to speed up my webapps and give them better protection against flaky APIs.
-(More on that in this [blog post](http://blog.pamelafox.org/2010/10/lscache-localstorage-based-memcache.html))
-
-For example, [RageTube](http://ragetube.net) uses `lscache` to fetch Youtube API results for 10 minutes:
-
-```js
-var key = 'youtube:' + query;
-var json = lscache.get(key);
-if (json) {
-  processJSON(json);
-} else {
-  fetchJSON(query);
-}
-
-function processJSON(json) {
-  // ..
-}
-
-function fetchJSON() {
-  var searchUrl = 'http://gdata.youtube.com/feeds/api/videos';
-  var params = {
-   'v': '2', 'alt': 'jsonc', 'q': encodeURIComponent(query)
-  }
-  JSONP.get(searchUrl, params, null, function(json) {
-    processJSON(json);
-    lscache.set(key, json, 10);
-  });
-}
-```
-
-It does not have to be used for only expiration-based caching, however. It can also be used as just a wrapper for `localStorage`, as it provides the benefit of handling JS object (de-)serialization.
-
-For example, the [QuizCards](http://quizcards.info) Chrome extensions use `lscache`
-to store the user statistics for each user bucket, and those stats are an array
-of objects.
-
-```js
-function initBuckets() {
-  var bucket1 = [];
-  for (var i = 0; i < CARDS_DATA.length; i++) {
-    var datum = CARDS_DATA[i];
-    bucket1.push({'id': datum.id, 'lastAsked': 0});
-  }
-  lscache.set(LS_BUCKET + 1, bucket1);
-  lscache.set(LS_BUCKET + 2, []);
-  lscache.set(LS_BUCKET + 3, []);
-  lscache.set(LS_BUCKET + 4, []);
-  lscache.set(LS_BUCKET + 5, []);
-  lscache.set(LS_INIT, 'true')
-}
+lscacheWebsql.get('data').name)
+             .done(function(val) { console.log(val.name); })
+             .fail(function(e) { console.error('Uh oh: ' + e); }
 ```
 
 Browser Support
 ----------------
 
-The `lscache` library should work in all browsers where `localStorage` is supported.
+The `lscacheWebsql` library should work in all browsers where `WebSQL` is supported.
 A list of those is here:
-http://www.quirksmode.org/dom/html5.html
+http://caniuse.com/#feat=sql-storage
 
