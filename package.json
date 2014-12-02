@@ -1,8 +1,9 @@
 {
   "name": "lscache-websql",
   "title": "lscache-websql",
-  "description": "A simple library that emulates memcache functions using HTML5 Websql",
-  "author": "Matt Brophy",
+  "description": "A simple library that emulates memcache functions using HTML5 WebSQL",
+  "author": "Matt Brophy <matt@brophy.org> (http://www.brophy.org/)",
+  "license": "Apache License, Version 2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/brophdawg11/lscache-websql.git"
@@ -20,6 +21,6 @@
     "grunt-contrib-qunit": "0.4.x"
   },
   "scripts": {
-    "test": "grunt test"
+    "build": "grunt"
   }
 }

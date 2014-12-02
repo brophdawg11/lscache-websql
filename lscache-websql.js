@@ -19,13 +19,13 @@
  */
 
 /* jshint undef:true, browser:true, node:true */
-/* global define */
+/* global define, $ */
 
 (function (root, factory) {
     if (typeof define === 'function' && define.amd) {
         // AMD. Register as an anonymous module.
         define([], factory);
-    } else if (typeof module !== "undefined" && module.exports) {
+    } else if (typeof module !== 'undefined' && module.exports) {
         // CommonJS/Node module
         module.exports = factory();
     } else {
@@ -44,9 +44,8 @@
   var EXPIRY_UNITS = 60 * 1000;
 
   // ECMAScript max Date (epoch + 1e8 days)
-  var MAX_DATE = Math.floor(8.64e15/EXPIRY_UNITS);
+  //var MAX_DATE = Math.floor(8.64e15/EXPIRY_UNITS);
 
-  var cachedStorage;
   var cachedJSON;
   var warnings = false;
 
@@ -57,6 +56,8 @@
   var db;
 
   var tblName = 'data';
+  var tblKeyCol = 'keyx';
+  var tblValCol = 'valx';
 
   var supportedDfd = new $.Deferred();
 
@@ -79,7 +80,8 @@
   }
 
   function createTable() {
-    return executeTx('CREATE TABLE ' + tblName + ' (key unique, val)');
+    return executeTx('CREATE TABLE ' + tblName +
+                     ' (' + tblKeyCol + ' unique, ' + tblValCol + ')');
   }
 
   // Check support and init
@@ -142,30 +144,36 @@
 
   function getItem(key, cb) {
     var func = partial(executeTx,
-                       'SELECT val FROM ' + tblName + ' WHERE key = ?',
+                       'SELECT ' + tblValCol + ' FROM ' + tblName + ' WHERE ' + tblKeyCol + ' = ?',
                        [ key ]);
     return supportedDfd.then(func);
   }
 
   function setItem(key, value, cb) {
     var func = partial(executeTx,
-                       'INSERT INTO ' + tblName + ' (key, val) VALUES (?, ?)',
+                       'INSERT INTO ' + tblName +
+                       ' (' + tblKeyCol + ', ' + tblValCol + ') ' +
+                       'VALUES (?, ?)',
                        [ key, value ]);
     return supportedDfd.then(func);
   }
 
   function removeItem(key) {
     var func = partial(executeTx,
-                       'DELETE FROM ' + tblName + ' WHERE key = ?',
+                       'DELETE FROM ' + tblName + ' WHERE ' + tblKeyCol + ' = ?',
                        [ key ]);
     return supportedDfd.then(func);
   }
 
   function warn(message, err) {
-    if (!warnings) return;
-    if (!('console' in window) || typeof window.console.warn !== 'function') return;
-    window.console.warn("lscache - " + message);
-    if (err) window.console.warn("lscache - The error was: " + err.message);
+    if ( warnings &&
+         ('console' in window) &&
+         typeof window.console.warn === 'function' ) {
+      window.console.warn('lscacheWebsql - ' + message);
+      if (err) {
+        window.console.warn('lscacheWebsql - The error was: ' + err.message);
+      }
+    }
   }
 
   var lscacheWebsql = {
@@ -190,28 +198,36 @@
                    // set an expiration.  Use .fail() to preserve the error result
                    .fail(function () {
                      return removeItem(key);
-                   })
+                   });
           } else {
             // In case they previously set a time, remove that info from localStorage.
             return new $.Deferred()
                         .resolve(results)
                         .done(function () {
-                          return removeItem(expirationKey(key))
+                          return removeItem(expirationKey(key));
                         });
           }
         }
+
+        var msg;
 
         // If we don't get a string value, try to stringify
         // In future, localStorage may properly support storing non-strings
         // and this can be removed.
         if (typeof value !== 'string') {
-          if (!supportsJSON()) return;
+          if (!supportsJSON()) {
+            msg = 'Unable to stringify non-string value, ignoring';
+            warn(msg);
+            return new $.Deferred().reject(msg);
+          }
           try {
             value = JSON.stringify(value);
           } catch (e) {
             // Sometimes we can't stringify due to circular refs
             // in complex objects, so we won't bother storing then.
-            return;
+            msg = 'Unable to stringify circular references, ignoring';
+            warn(msg);
+            return new $.Deferred().reject(msg);
           }
         }
 
@@ -263,8 +279,9 @@
           //   }
           // } else {
           //   // If it was some other error, just give up.
-             warn("Could not add item with key '" + key + "'", e);
-             return new $.Deferred().reject("Could not add item with key '" + key + "'");
+             msg = 'Could not add item with key \'' + key + '\'';
+             warn(msg, e);
+             return new $.Deferred().reject(msg);
           //   return;
           // }
         }
@@ -281,7 +298,7 @@
         var exprKey = expirationKey(key);
         return getItem(exprKey).then(function (sqlResultSet) {
           try {
-            var expr = sqlResultSet.rows.item(0)['val'];
+            var expr = sqlResultSet.rows.item(0)[tblValCol];
             if (expr) {
               var expirationTime = parseInt(expr, EXPIRY_RADIX);
 
@@ -339,7 +356,7 @@
               var value = null;
 
               try {
-                value = sqlResultSet.rows.item(0)['val'];
+                value = sqlResultSet.rows.item(0)[tblValCol];
                 if (!value || !supportsJSON()) {
                   return value;
                 }

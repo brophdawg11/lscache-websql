@@ -1,7 +1,10 @@
 require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);throw new Error("Cannot find module '"+o+"'")}var f=n[o]={exports:{}};t[o][0].call(f.exports,function(e){var n=t[o][1][e];return s(n?n:e)},f,f.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 /**
- * lscache library
- * Copyright (c) 2011, Pamela Fox
+ * lscache-websql library
+ * Copyright (c) 2014, Matt Brophy
+ *
+ * Largely inspired by Pamela Fox's lscache library
+ *   https://github.com/pamelafox/lscache
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,23 +20,20 @@ require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof requ
  */
 
 /* jshint undef:true, browser:true, node:true */
-/* global define */
+/* global define, $ */
 
 (function (root, factory) {
     if (typeof define === 'function' && define.amd) {
         // AMD. Register as an anonymous module.
         define([], factory);
-    } else if (typeof module !== "undefined" && module.exports) {
+    } else if (typeof module !== 'undefined' && module.exports) {
         // CommonJS/Node module
         module.exports = factory();
     } else {
         // Browser globals
-        root.lscache = factory();
+        root.lscacheWebsql = factory();
     }
 }(this, function () {
-
-  // Prefix for all lscache keys
-  var CACHE_PREFIX = 'lscache-';
 
   // Suffix for the key name on the expiration items in localStorage
   var CACHE_SUFFIX = '-cacheexpiration';
@@ -45,34 +45,72 @@ require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof requ
   var EXPIRY_UNITS = 60 * 1000;
 
   // ECMAScript max Date (epoch + 1e8 days)
-  var MAX_DATE = Math.floor(8.64e15/EXPIRY_UNITS);
+  //var MAX_DATE = Math.floor(8.64e15/EXPIRY_UNITS);
 
-  var cachedStorage;
   var cachedJSON;
-  var cacheBucket = '';
   var warnings = false;
 
-  // Determines if localStorage is supported in the browser;
-  // result is cached for better performance instead of being run each time.
-  // Feature detection is based on how Modernizr does it;
-  // it's not straightforward due to FF4 issues.
-  // It's not run at parse-time as it takes 200ms in Android.
-  function supportsStorage() {
-    var key = '__lscachetest__';
-    var value = key;
+  var dbName = '__lscache-websql__';
+  var dbVersion = '1.0';
+  var dbDesc = 'lscache-websql db';
+  var dbSize = 10 * 1024 * 1024;
+  var db;
 
-    if (cachedStorage !== undefined) {
-      return cachedStorage;
-    }
+  var tblName = 'data';
+  var tblKeyCol = 'keyx';
+  var tblValCol = 'valx';
 
-    try {
-      setItem(key, value);
-      removeItem(key);
-      cachedStorage = true;
-    } catch (exc) {
-      cachedStorage = false;
-    }
-    return cachedStorage;
+  var supportedDfd = new $.Deferred();
+
+  function partial(func) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return function () {
+      var args2 = Array.prototype.slice.call(arguments, 0);
+      return func.apply(null, args.concat(args2));
+    };
+  }
+
+  function dropTable() {
+    return executeTx('DROP TABLE ' + tblName, [])
+             .then(function (tx, val) {
+               return new $.Deferred().resolve(tx, val);
+             },
+             function (tx, err) {
+               return new $.Deferred().resolve(tx, null);
+             });
+  }
+
+  function createTable() {
+    return executeTx('CREATE TABLE ' + tblName +
+                     ' (' + tblKeyCol + ' unique, ' + tblValCol + ')');
+  }
+
+  // Check support and init
+  if (!('openDatabase' in window)) {
+    supportedDfd.reject('openDatabase not defined!');
+  } else {
+    db = openDatabase(dbName, dbVersion, dbDesc, dbSize);
+    dropTable().then(createTable)
+               .done(supportedDfd.resolve)
+               .fail(supportedDfd.reject);
+  }
+
+  function executeTx(sql, paramArr) {
+    var dfd = new $.Deferred();
+    warn('Executing sql: ' + sql);
+    warn(paramArr);
+    db.transaction(function (tx) {
+      tx.executeSql(sql, paramArr,
+                    function (tx, result) {
+                      dfd.resolve(result);
+                    },
+                    function (tx, err) {
+                      dfd.reject(err);
+                    });
+    });
+    return dfd.promise().fail(function (e) {
+      warn('tx.executeSql failed: ' + e.message);
+    });
   }
 
   // Determines if native JSON (de-)serialization is supported in the browser.
@@ -105,28 +143,41 @@ require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof requ
    * Wrapper functions for localStorage methods
    */
 
-  function getItem(key) {
-    return localStorage.getItem(CACHE_PREFIX + cacheBucket + key);
+  function getItem(key, cb) {
+    var func = partial(executeTx,
+                       'SELECT ' + tblValCol + ' FROM ' + tblName + ' WHERE ' + tblKeyCol + ' = ?',
+                       [ key ]);
+    return supportedDfd.then(func);
   }
 
-  function setItem(key, value) {
-    // Fix for iPad issue - sometimes throws QUOTA_EXCEEDED_ERR on setItem.
-    localStorage.removeItem(CACHE_PREFIX + cacheBucket + key);
-    localStorage.setItem(CACHE_PREFIX + cacheBucket + key, value);
+  function setItem(key, value, cb) {
+    var func = partial(executeTx,
+                       'INSERT INTO ' + tblName +
+                       ' (' + tblKeyCol + ', ' + tblValCol + ') ' +
+                       'VALUES (?, ?)',
+                       [ key, value ]);
+    return supportedDfd.then(func);
   }
 
   function removeItem(key) {
-    localStorage.removeItem(CACHE_PREFIX + cacheBucket + key);
+    var func = partial(executeTx,
+                       'DELETE FROM ' + tblName + ' WHERE ' + tblKeyCol + ' = ?',
+                       [ key ]);
+    return supportedDfd.then(func);
   }
 
   function warn(message, err) {
-    if (!warnings) return;
-    if (!('console' in window) || typeof window.console.warn !== 'function') return;
-    window.console.warn("lscache - " + message);
-    if (err) window.console.warn("lscache - The error was: " + err.message);
+    if ( warnings &&
+         ('console' in window) &&
+         typeof window.console.warn === 'function' ) {
+      window.console.warn('lscacheWebsql - ' + message);
+      if (err) {
+        window.console.warn('lscacheWebsql - The error was: ' + err.message);
+      }
+    }
   }
 
-  var lscache = {
+  var lscacheWebsql = {
     /**
      * Stores the value in localStorage. Expires after specified number of minutes.
      * @param {string} key
@@ -134,82 +185,108 @@ require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof requ
      * @param {number} time
      */
     set: function(key, value, time) {
-      if (!supportsStorage()) return;
+      return supportedDfd.then(function () {
 
-      // If we don't get a string value, try to stringify
-      // In future, localStorage may properly support storing non-strings
-      // and this can be removed.
-      if (typeof value !== 'string') {
-        if (!supportsJSON()) return;
-        try {
-          value = JSON.stringify(value);
-        } catch (e) {
-          // Sometimes we can't stringify due to circular refs
-          // in complex objects, so we won't bother storing then.
-          return;
-        }
-      }
-
-      try {
-        setItem(key, value);
-      } catch (e) {
-        if (e.name === 'QUOTA_EXCEEDED_ERR' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.name === 'QuotaExceededError') {
-          // If we exceeded the quota, then we will sort
-          // by the expire time, and then remove the N oldest
-          var storedKeys = [];
-          var storedKey;
-          for (var i = 0; i < localStorage.length; i++) {
-            storedKey = localStorage.key(i);
-
-            if (storedKey.indexOf(CACHE_PREFIX + cacheBucket) === 0 && storedKey.indexOf(CACHE_SUFFIX) < 0) {
-              var mainKey = storedKey.substr((CACHE_PREFIX + cacheBucket).length);
-              var exprKey = expirationKey(mainKey);
-              var expiration = getItem(exprKey);
-              if (expiration) {
-                expiration = parseInt(expiration, EXPIRY_RADIX);
-              } else {
-                // TODO: Store date added for non-expiring items for smarter removal
-                expiration = MAX_DATE;
-              }
-              storedKeys.push({
-                key: mainKey,
-                size: (getItem(mainKey)||'').length,
-                expiration: expiration
-              });
-            }
+        function setExpiration(results) {
+          // If a time is specified, store expiration info in localStorage
+          if (time) {
+            return setItem(expirationKey(key), (currentTime() + time).toString(EXPIRY_RADIX))
+                   // Return the prior answer after we set the expiration
+                   .then(function () {
+                     return results;
+                   })
+                   // Otherwise remove the item we just set since we failed to
+                   // set an expiration.  Use .fail() to preserve the error result
+                   .fail(function () {
+                     return removeItem(key);
+                   });
+          } else {
+            // In case they previously set a time, remove that info from localStorage.
+            return new $.Deferred()
+                        .resolve(results)
+                        .done(function () {
+                          return removeItem(expirationKey(key));
+                        });
           }
-          // Sorts the keys with oldest expiration time last
-          storedKeys.sort(function(a, b) { return (b.expiration-a.expiration); });
+        }
 
-          var targetSize = (value||'').length;
-          while (storedKeys.length && targetSize > 0) {
-            storedKey = storedKeys.pop();
-            warn("Cache is full, removing item with key '" + key + "'");
-            removeItem(storedKey.key);
-            removeItem(expirationKey(storedKey.key));
-            targetSize -= storedKey.size;
+        var msg;
+
+        // If we don't get a string value, try to stringify
+        // In future, localStorage may properly support storing non-strings
+        // and this can be removed.
+        if (typeof value !== 'string') {
+          if (!supportsJSON()) {
+            msg = 'Unable to stringify non-string value, ignoring';
+            warn(msg);
+            return new $.Deferred().reject(msg);
           }
           try {
-            setItem(key, value);
+            value = JSON.stringify(value);
           } catch (e) {
-            // value may be larger than total quota
-            warn("Could not add item with key '" + key + "', perhaps it's too big?", e);
-            return;
+            // Sometimes we can't stringify due to circular refs
+            // in complex objects, so we won't bother storing then.
+            msg = 'Unable to stringify circular references, ignoring';
+            warn(msg);
+            return new $.Deferred().reject(msg);
           }
-        } else {
-          // If it was some other error, just give up.
-          warn("Could not add item with key '" + key + "'", e);
-          return;
         }
-      }
 
-      // If a time is specified, store expiration info in localStorage
-      if (time) {
-        setItem(expirationKey(key), (currentTime() + time).toString(EXPIRY_RADIX));
-      } else {
-        // In case they previously set a time, remove that info from localStorage.
-        removeItem(expirationKey(key));
-      }
+        try {
+          return setItem(key, value).then(setExpiration);
+        } catch (e) {
+          // if (e.name === 'QUOTA_EXCEEDED_ERR' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.name === 'QuotaExceededError') {
+          //   // If we exceeded the quota, then we will sort
+          //   // by the expire time, and then remove the N oldest
+          //   var storedKeys = [];
+          //   var storedKey;
+          //   for (var i = 0; i < localStorage.length; i++) {
+          //     storedKey = localStorage.key(i);
+
+          //     if (storedKey.indexOf(CACHE_PREFIX + cacheBucket) === 0 && storedKey.indexOf(CACHE_SUFFIX) < 0) {
+          //       var mainKey = storedKey.substr((CACHE_PREFIX + cacheBucket).length);
+          //       var exprKey = expirationKey(mainKey);
+          //       var expiration = getItem(exprKey);
+          //       if (expiration) {
+          //         expiration = parseInt(expiration, EXPIRY_RADIX);
+          //       } else {
+          //         // TODO: Store date added for non-expiring items for smarter removal
+          //         expiration = MAX_DATE;
+          //       }
+          //       storedKeys.push({
+          //         key: mainKey,
+          //         size: (getItem(mainKey)||'').length,
+          //         expiration: expiration
+          //       });
+          //     }
+          //   }
+          //   // Sorts the keys with oldest expiration time last
+          //   storedKeys.sort(function(a, b) { return (b.expiration-a.expiration); });
+
+          //   var targetSize = (value||'').length;
+          //   while (storedKeys.length && targetSize > 0) {
+          //     storedKey = storedKeys.pop();
+          //     warn("Cache is full, removing item with key '" + key + "'");
+          //     removeItem(storedKey.key);
+          //     removeItem(expirationKey(storedKey.key));
+          //     targetSize -= storedKey.size;
+          //   }
+          //   try {
+          //     setItem(key, value);
+          //   } catch (e) {
+          //     // value may be larger than total quota
+          //     warn("Could not add item with key '" + key + "', perhaps it's too big?", e);
+          //     return;
+          //   }
+          // } else {
+          //   // If it was some other error, just give up.
+             msg = 'Could not add item with key \'' + key + '\'';
+             warn(msg, e);
+             return new $.Deferred().reject(msg);
+          //   return;
+          // }
+        }
+      });
     },
 
     /**
@@ -218,21 +295,24 @@ require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof requ
      * @return {Boolean}
      */
     isExpired: function(key) {
-      if (!supportsStorage()) return null;
+      return supportedDfd.then(function () {
+        var exprKey = expirationKey(key);
+        return getItem(exprKey).then(function (sqlResultSet) {
+          try {
+            var expr = sqlResultSet.rows.item(0)[tblValCol];
+            if (expr) {
+              var expirationTime = parseInt(expr, EXPIRY_RADIX);
 
-      var exprKey = expirationKey(key);
-      var expr = getItem(exprKey);
+              // Check if we should actually kick item out of storage
+              if (currentTime() >= expirationTime) {
+                return true;
+              }
+            }
+          } catch (e) {}
 
-      if (expr) {
-        var expirationTime = parseInt(expr, EXPIRY_RADIX);
-
-        // Check if we should actually kick item out of storage
-        if (currentTime() >= expirationTime) {
-          return true;
-        }
-      }
-
-      return false;
+          return false;
+        });
+      });
     },
 
     /**
@@ -243,38 +323,62 @@ require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof requ
      * @return {string|Object}
      */
     get: function(key, skipRemove, allowExpired) {
-      if (!supportsStorage()) return null;
-
-      var value;
-
       skipRemove = (skipRemove === true);  // Default false
       allowExpired = (allowExpired === true); // Default false
 
-      if (lscache.isExpired(key)) {
-        if (!skipRemove) {
-          var exprKey = expirationKey(key);
-          value = getItem(key);  // Cache in case allowExpired is also true!
-          removeItem(key);
-          removeItem(exprKey);
-        }
-        if (!allowExpired) {
-          return null;
-        }
-      }
+      return supportedDfd.then(function () {
 
-      // Tries to de-serialize stored value if its an object, and returns the normal value otherwise.
-      if (!value) { value = getItem(key); }
-      if (!value || !supportsJSON()) {
-        return value;
-      }
+        return lscacheWebsql.isExpired(key).then(function (expired) {
+          var value = new $.Deferred(),
+              dfd = new $.Deferred().resolve();
 
-      try {
-        // We can't tell if its JSON or a string, so we try to parse
-        return JSON.parse(value);
-      } catch (e) {
-        // If we can't parse, it's probably because it isn't an object
-        return value;
-      }
+          if (expired) {
+            if (!skipRemove) {
+              var exprKey = expirationKey(key);
+              dfd = dfd.then(function () {
+                      return getItem(key).then(value.resolve, value.reject);
+                    })
+                    .then(function (v) {
+                      return removeItem(key);
+                    })
+                    .then(function (value) {
+                      return removeItem(exprKey);
+                    });
+            }
+            if (!allowExpired) {
+              return null;
+            }
+          }
+
+          // Tries to de-serialize stored value if its an object, and returns the normal value otherwise.
+          dfd = dfd.then(function () {
+
+            function parseValue (sqlResultSet) {
+              var value = null;
+
+              try {
+                value = sqlResultSet.rows.item(0)[tblValCol];
+                if (!value || !supportsJSON()) {
+                  return value;
+                }
+                // We can't tell if its JSON or a string, so we try to parse
+                return JSON.parse(value);
+              } catch (e) {
+                // If we can't parse, it's probably because it isn't an object
+                return value;
+              }
+            }
+
+            if (value.state() === 'pending') {
+              return getItem(key).then(parseValue);
+            } else {
+              return value.then(parseValue);
+            }
+          });
+
+          return dfd.promise();
+        });
+      });
     },
 
     /**
@@ -283,9 +387,13 @@ require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof requ
      * @param {string} key
      */
     remove: function(key) {
-      if (!supportsStorage()) return null;
-      removeItem(key);
-      removeItem(expirationKey(key));
+      return supportedDfd
+              .then(function () {
+                removeItem(key);
+              })
+              .then(function () {
+                removeItem(expirationKey(key));
+              });
     },
 
     /**
@@ -294,37 +402,21 @@ require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof requ
      * @return {boolean}
      */
     supported: function() {
-      return supportsStorage();
+      return supportedDfd
+              .then(function () {
+                      return true;
+                    },
+                    function () {
+                      return false;
+                    });
     },
 
     /**
      * Flushes all lscache items and expiry markers without affecting rest of localStorage
      */
-    flush: function() {
-      if (!supportsStorage()) return;
-
-      // Loop in reverse as removing items will change indices of tail
-      for (var i = localStorage.length-1; i >= 0 ; --i) {
-        var key = localStorage.key(i);
-        if (key.indexOf(CACHE_PREFIX + cacheBucket) === 0) {
-          localStorage.removeItem(key);
-        }
-      }
-    },
-
-    /**
-     * Appends CACHE_PREFIX so lscache will partition data in to different buckets.
-     * @param {string} bucket
-     */
-    setBucket: function(bucket) {
-      cacheBucket = bucket;
-    },
-
-    /**
-     * Resets the string being appended to CACHE_PREFIX so lscache will use the default storage behavior.
-     */
-    resetBucket: function() {
-      cacheBucket = '';
+    flush: function(cb) {
+      return supportedDfd
+              .then(partial(executeTx, 'DELETE FROM ' + tblName, []));
     },
 
     /**
@@ -336,7 +428,7 @@ require=(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof requ
   };
 
   // Return the module
-  return lscache;
+  return lscacheWebsql;
 }));
 
 },{}],"qunit":[function(require,module,exports){
@@ -1963,257 +2055,264 @@ QUnit.diff = (function() {
 }).call(this,typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
 },{}],4:[function(require,module,exports){
 /* jshint undef:true, browser:true, node:true */
-/* global QUnit, test, equal, asyncTest, start, define */
+/* global QUnit, test, equal, strictEqual, asyncTest, stop, start, define */
 
-var startTests = function (lscache) {
+var startTests = function (lscacheWebsql) {
 
   var originalConsole = window.console;
-  var CACHE_PREFIX = 'lscache-';
+  var Automator = window.Automator;
 
-  QUnit.module('lscache', {
+  QUnit.module('lscache-websql', {
     setup: function() {
-      // Reset localStorage before each test
+      // Reset before each test
       try {
-        localStorage.clear();
-      } catch(e) {}
+        stop();
+        lscacheWebsql.enableWarnings(true);
+        lscacheWebsql.flush().then(start);
+      } catch(e) {
+        console.error('Could not flush lscacheWebsql');
+      }
     },
     teardown: function() {
-      // Reset localStorage after each test
+      // Reset before each test
       try {
-        localStorage.clear();
-      } catch(e) {}
+        stop();
+        lscacheWebsql.flush().then(start);
+      } catch(e) {
+        console.error('Could not flush lscacheWebsql');
+      }
       window.console = originalConsole;
-      lscache.enableWarnings(false);
+      lscacheWebsql.enableWarnings(false);
     }
   });
 
-  test('Testing set() and get() with string', function() {
-    var key = 'thekey';
-    var value = 'thevalue';
-    lscache.set(key, value, 1);
-    if (lscache.supported()) {
-      equal(lscache.get(key), value, 'We expect value to be ' + value);
-    } else {
-      equal(lscache.get(key), null, 'We expect null value');
-    }
-  });
-
-  if (lscache.supported()) {
-
-    test('Testing set() with non-string values', function() {
-      var key, value;
-
-      key = 'numberkey';
-      value = 2;
-      lscache.set(key, value, 3);
-      equal(lscache.get(key)+1, value+1, 'We expect incremented value to be ' + (value+1));
-
-      key = 'arraykey';
-      value = ['a', 'b', 'c'];
-      lscache.set(key, value, 3);
-      equal(lscache.get(key).length, value.length, 'We expect array to have length ' + value.length);
-
-      key = 'objectkey';
-      value = {'name': 'Pamela', 'age': 26};
-      lscache.set(key, value, 3);
-      equal(lscache.get(key).name, value.name, 'We expect name to be ' + value.name);
-    });
-
-    test('Testing remove()', function() {
-      var key = 'thekey';
-      lscache.set(key, 'bla', 2);
-      lscache.remove(key);
-      equal(lscache.get(key), null, 'We expect value to be null');
-    });
-
-    test('Testing flush()', function() {
-      localStorage.setItem('outside-cache', 'not part of lscache');
-      var key = 'thekey';
-      lscache.set(key, 'bla', 100);
-      lscache.flush();
-      equal(lscache.get(key), null, 'We expect flushed value to be null');
-      equal(localStorage.getItem('outside-cache'), 'not part of lscache', 'We expect localStorage value to still persist');
-    });
-
-    test('Testing setBucket()', function() {
-      var key = 'thekey';
-      var value1 = 'awesome';
-      var value2 = 'awesomer';
-      var bucketName = 'BUCKETONE';
-
-      lscache.set(key, value1, 1);
-      lscache.setBucket(bucketName);
-      lscache.set(key, value2, 1);
-
-      equal(lscache.get(key), value2, 'We expect "' + value2 + '" to be returned for the current bucket: ' + bucketName);
-      lscache.flush();
-      equal(lscache.get(key), null, 'We expect "' + value2 + '" to be flushed for the current bucket');
-      lscache.resetBucket();
-      equal(lscache.get(key), value1, 'We expect "' + value1 + '", the non-bucket value, to persist');
-    });
-
-    test('Testing setWarnings()', function() {
-      window.console = {
-        calls: 0,
-        warn: function() { this.calls++; }
-      };
-
-      var longString = (new Array(10000)).join('s');
-      var num = 0;
-      while(num < 10000) {
-        try {
-          localStorage.setItem("key" + num, longString);
-          num++;
-        } catch (e) {
-          break;
-        }
-      }
-      localStorage.clear();
-
-      for (var i = 0; i <= num; i++) {
-        lscache.set("key" + i, longString);
-      }
-
-      // Warnings not enabled, nothing should be logged
-      equal(window.console.calls, 0);
-
-      lscache.enableWarnings(true);
-
-      lscache.set("key" + i, longString);
-      equal(window.console.calls, 1, "We expect one warning to have been printed");
-
-      window.console = null;
-      lscache.set("key" + i, longString);
-    });
-
-    test('Testing quota exceeding', function() {
-      var key = 'thekey';
-
-      // Figure out this browser's localStorage limit -
-      // Chrome is around 2.6 mil, for example
-      var stringLength = 10000;
-      var longString = (new Array(stringLength+1)).join('s');
-      var num = 0;
-      while(num < 10000) {
-        try {
-          localStorage.setItem(key + num, longString);
-          num++;
-        } catch (e) {
-          break;
-        }
-      }
-      localStorage.clear();
-      // Now add enough to go over the limit
-      var approxLimit = num * stringLength;
-      var numKeys = Math.ceil(approxLimit/(stringLength+8)) + 1;
-      var currentKey;
-      var i = 0;
-
-      for (i = 0; i <= numKeys; i++) {
-        currentKey = key + i;
-        lscache.set(currentKey, longString, i+1);
-      }
-      // Test that last-to-expire is still there
-      equal(lscache.get(currentKey), longString, 'We expect newest value to still be there');
-      // Test that the first-to-expire is kicked out
-      equal(lscache.get(key + '0'), null, 'We expect oldest value to be kicked out (null)');
-
-      // Test trying to add something thats bigger than previous items,
-      // check that it is successfully added (requires removal of multiple keys)
-      var veryLongString = longString + longString;
-      lscache.set(key + 'long', veryLongString, i+1);
-      equal(lscache.get(key + 'long'), veryLongString, 'We expect long string to get stored');
-
-      // Try the same with no expiry times
-      localStorage.clear();
-      for (i = 0; i <= numKeys; i++) {
-        currentKey = key + i;
-        lscache.set(currentKey, longString);
-      }
-      // Test that latest added is still there
-      equal(lscache.get(currentKey), longString, 'We expect value to be set');
-    });
-
-    // We do this test last since it must wait 1 minute
-    asyncTest('Testing set() and get() with string and expiration', 1, function() {
-
-      var key = 'thekey';
-      var value = 'thevalue';
-      var minutes = 1;
-      lscache.set(key, value, minutes);
-      setTimeout(function() {
-        equal(lscache.get(key), null, 'We expect value to be null');
-        start();
-      }, 1000*60*minutes);
-    });
-
-    asyncTest('Testing set() and get() with string and expiration in a different bucket', 2, function() {
-
-      var key = 'thekey';
-      var value1 = 'thevalue1';
-      var value2 = 'thevalue2';
-      var minutes = 1;
-      var bucket = 'newbucket';
-      lscache.set(key, value1, minutes * 2);
-      lscache.setBucket(bucket);
-      lscache.set(key, value2, minutes);
-      setTimeout(function() {
-        equal(lscache.get(key), null, 'We expect value to be null for the bucket: ' + bucket);
-        lscache.resetBucket();
-        equal(lscache.get(key), value1, 'We expect value to be ' + value1 + ' for the base bucket.');
-        start();
-      }, 1000*60*minutes);
-    });
-
-    asyncTest("Test isExpired() function", function() {
-      var key = 'thekey', val = 'thevalue', mins = 1,
-          strictEqual = window.strictEqual;
-
-      lscache.set(key, val, mins);
-
-      setTimeout(function () {
-        strictEqual(lscache.isExpired(key), true, 'Ensure the key is considered expired');
-        start();
-      }, mins * 60 * 1000 + 1000);  // 1 second longer
-    });
-
-    asyncTest("Test get() skipRemove/allowExpired parameters", function() {
-      var key = 'thekey', val = 'thevalue', mins = 1,
-          strictEqual = window.strictEqual;
-
-      lscache.set(key, val, mins);
-
-      setTimeout(function () {
-        strictEqual(lscache.get(key, true), null, 'get() should return null for the expired key');
-        strictEqual(localStorage.getItem(CACHE_PREFIX + key), val, 'Ensure the value was not removed in the last get() call');
-        strictEqual(lscache.get(key, true, true), val, 'get() should return the value when allowExpired is true');
-
-        // Now, call without skipRemove, we should get the value but it should also be removed
-        strictEqual(lscache.get(key, false, true), val, 'get() should return the value when allowExpired is true');
-        strictEqual(localStorage.getItem(CACHE_PREFIX + key), null, 'Ensure the value was removed in the last get() call');
-
-        start();
-      }, mins * 60 * 1000 + 1000);  // 1 second longer
-    });
+  function partial(func) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return function () {
+      var args2 = Array.prototype.slice.call(arguments, 0);
+      return func.apply(null, args.concat(args2));
+    };
   }
 
-  if (QUnit.config.autostart === false) {
+  function assertVal(toBe, val) {
+    strictEqual(val, toBe, 'Expected value to be ' + toBe);
+  }
+
+  function assertArr(toBe, val) {
+    strictEqual(val.length, toBe.length, 'Expected value to have length ' + toBe.length);
+  }
+
+  function assertObj(toBe, val) {
+    var key;
+    for (key in toBe) {
+      assertVal(val[key], toBe[key]);
+    }
+    for (key in val) {
+      assertVal(val[key], toBe[key]);
+    }
+  }
+
+  asyncTest('Testing set() and get() with string', function() {
+    var key = 'thekey',
+        value = 'thevalue',
+        a = new Automator(),
+        supported = false;
+
+    a.automate([ partial(lscacheWebsql.set, key, value, 1),
+                 lscacheWebsql.supported,
+                 function (s) { supported = s; },  // Cache val
+                 partial(lscacheWebsql.get, key),
+                 function (val) {
+                   if (supported) {
+                     strictEqual(val, value, 'We expect value to be ' + value);
+                   } else {
+                     strictEqual(val, null, 'We expect null value');
+                   }
+                 },
+                 start ]);
+  });
+
+  asyncTest('Testing set() with number value', function() {
+    var key = 'numberkey',
+        value = 2,
+        a = new Automator();
+
+    a.automate([ partial(lscacheWebsql.set, key, value, 3),
+                 partial(lscacheWebsql.get, key),
+                 partial(assertVal, value),
+                 start ]);
+  });
+
+  asyncTest('Testing set() with array value', function() {
+    var key = 'arraykey',
+        value = ['a', 'b', 3],
+        a = new Automator();
+
+    a.automate([ partial(lscacheWebsql.set, key, value, 3),
+                 partial(lscacheWebsql.get, key),
+                 partial(assertArr, value),
+                 start ]);
+  });
+
+  asyncTest('Testing set() with object value', function() {
+    var key = 'objectkey',
+        value = { key1 : 'Test', key2: 1 },
+        a = new Automator();
+
+    a.automate([ partial(lscacheWebsql.set, key, value, 3),
+                 partial(lscacheWebsql.get, key),
+                 partial(assertObj, value),
+                 start ]);
+  });
+
+  asyncTest('Testing remove()', function() {
+    var key = 'thekey',
+        a = new Automator();
+
+    a.automate([ partial(lscacheWebsql.set, key, 'bla', 2),
+                 partial(lscacheWebsql.remove, key),
+                 partial(lscacheWebsql.get, key),
+                 partial(assertVal, null),
+                 start ]);
+  });
+
+  asyncTest('Testing flush()', function() {
+    var key = 'thekey',
+        a = new Automator();
+
+    a.automate([ partial(lscacheWebsql.set, key, 'bla', 100),
+                 partial(lscacheWebsql.flush),
+                 partial(lscacheWebsql.get, key),
+                 partial(assertVal, null),
+                 start ]);
+  });
+
+  // test('Testing quota exceeding', function() {
+  //   var key = 'thekey';
+
+  //   // Figure out this browser's localStorage limit -
+  //   // Chrome is around 2.6 mil, for example
+  //   var stringLength = 10000;
+  //   var longString = (new Array(stringLength+1)).join('s');
+  //   var num = 0;
+  //   while(num < 10000) {
+  //     try {
+  //       localStorage.setItem(key + num, longString);
+  //       num++;
+  //     } catch (e) {
+  //       break;
+  //     }
+  //   }
+  //   localStorage.clear();
+  //   // Now add enough to go over the limit
+  //   var approxLimit = num * stringLength;
+  //   var numKeys = Math.ceil(approxLimit/(stringLength+8)) + 1;
+  //   var currentKey;
+  //   var i = 0;
+
+  //   for (i = 0; i <= numKeys; i++) {
+  //     currentKey = key + i;
+  //     lscacheWebsql.set(currentKey, longString, i+1);
+  //   }
+  //   // Test that last-to-expire is still there
+  //   equal(lscacheWebsql.get(currentKey), longString, 'We expect newest value to still be there');
+  //   // Test that the first-to-expire is kicked out
+  //   equal(lscacheWebsql.get(key + '0'), null, 'We expect oldest value to be kicked out (null)');
+
+  //   // Test trying to add something thats bigger than previous items,
+  //   // check that it is successfully added (requires removal of multiple keys)
+  //   var veryLongString = longString + longString;
+  //   lscacheWebsql.set(key + 'long', veryLongString, i+1);
+  //   equal(lscacheWebsql.get(key + 'long'), veryLongString, 'We expect long string to get stored');
+
+  //   // Try the same with no expiry times
+  //   localStorage.clear();
+  //   for (i = 0; i <= numKeys; i++) {
+  //     currentKey = key + i;
+  //     lscacheWebsql.set(currentKey, longString);
+  //   }
+  //   // Test that latest added is still there
+  //   equal(lscacheWebsql.get(currentKey), longString, 'We expect value to be set');
+  // });
+
+  // We do these tests last since they must wait 1 minute each
+  // asyncTest('Test isExpired() function', function () {
+  //   var key = 'thekey',
+  //       value = 'thevalue',
+  //       a = new Automator();
+
+  //   a.automate([ partial(lscacheWebsql.set, key, value, 1),
+  //                61 * 1000,
+  //                partial(lscacheWebsql.isExpired, key),
+  //                partial(assertVal, true),
+  //                start ]);
+  // });
+
+  // asyncTest('Testing set() and get() with string and expiration', function () {
+  //   var key = 'thekey',
+  //       value = 'thevalue',
+  //       a = new Automator();
+
+  //   a.automate([ partial(lscacheWebsql.set, key, value, 1),
+
+  //                // Should be valid after 1 seconds
+  //                1 * 1000,
+  //                partial(lscacheWebsql.get, key),
+  //                partial(assertVal, value),
+
+  //                // Should be invalid after 61 seconds
+  //                60 * 1000,
+  //                partial(lscacheWebsql.get, key),
+  //                partial(assertVal, null),
+  //                start ]);
+  // });
+
+  // asyncTest('Test get() skipRemove/allowExpired parameters', function () {
+  //   var key = 'thekey',
+  //       value = 'thevalue',
+  //       a = new Automator();
+
+  //   a.automate([ partial(lscacheWebsql.set, key, value, 1),
+  //                61 * 1000,
+
+  //                // Include skipRemove parameter.  Should return null but
+  //                // leave the value in the db
+  //                partial(lscacheWebsql.get, key, true),
+  //                partial(assertVal, null),
+
+  //                // Include skipRemove and allowExpired.  Should return the
+  //                // expired value and leave it in the db
+  //                partial(lscacheWebsql.get, key, true, true),
+  //                partial(assertVal, value),
+
+  //                // Call with allowExpired but without skipRemove.  Should
+  //                // return the expired value and remove it
+  //                partial(lscacheWebsql.get, key, false, true),
+  //                partial(assertVal, value),
+
+  //                // Call normally, should return null because the item was
+  //                // deleted last call
+  //                partial(lscacheWebsql.get, key),
+  //                partial(assertVal, null),
+
+  //                start ]);
+  // });
+
+  //if (QUnit.config.autostart === false) {
     QUnit.start();
-  }
+  //}
 };
 
 if (typeof module !== "undefined" && module.exports) {
-
-  var lscache = require('../lscache');
+  var lscacheWebsql = require('../lscache-websql');
   var qunit = require('qunit');
-  startTests(lscache);
+  startTests(lscacheWebsql);
 } else if (typeof define === 'function' && define.amd) {
-
   QUnit.config.autostart = false;
-  require(['../lscache'], startTests);
+  require(['../lscache-websql'], startTests);
 } else {
   // Assuming that lscache has been properly included
-  startTests(lscache);
+  startTests(lscacheWebsql);
 }
 
-},{"../lscache":1,"qunit":"nCxwBE"}]},{},[4])
+},{"../lscache-websql":1,"qunit":"nCxwBE"}]},{},[4])
