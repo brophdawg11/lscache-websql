@@ -10,7 +10,7 @@ This is a simple library that provides an [**lscache**](https://github.com/pamel
 Methods
 -------
 
-The library exposes 5 methods: `set()`, `get()`, `remove()`, `flush()`, and `isExpired`.
+The library exposes 5 methods: `set()`, `get()`, `remove()`, `flush()`, and `isExpired()`.
 
 * * *
 
@@ -52,6 +52,18 @@ Removes all items from webSql without affecting other data.
 
 ##### Returns
 jQuery.Promise to be resolved upon success, or rejected upon failure
+
+* * *
+
+### lscacheWebsql.isExpired(key)
+Checks whether a given key has expired
+
+##### Arguments
+1. `key` (**string**)
+
+##### Returns
+jQuery.Promise to be resolved upon success with `true` if the value is
+expired, and `false` otherwise, or rejected upon failure
 
 * * *
 
