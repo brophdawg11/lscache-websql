@@ -242,9 +242,9 @@ var startTests = function (lscacheWebsql) {
   //                start ]);
   // });
 
-  //if (QUnit.config.autostart === false) {
+  if (QUnit.config.autostart === false) {
     QUnit.start();
-  //}
+  }
 };
 
 if (typeof module !== "undefined" && module.exports) {
