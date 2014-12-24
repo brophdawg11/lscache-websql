@@ -56,8 +56,8 @@
   var db;
 
   var tblName = 'data';
-  var tblKeyCol = 'keyx';
-  var tblValCol = 'valx';
+  var tblKeyCol = 'key';
+  var tblValCol = 'val';
 
   var supportedDfd = new $.Deferred();
 
@@ -69,18 +69,8 @@
     };
   }
 
-  function dropTable() {
-    return executeTx('DROP TABLE ' + tblName, [])
-             .then(function (tx, val) {
-               return new $.Deferred().resolve(tx, val);
-             },
-             function (tx, err) {
-               return new $.Deferred().resolve(tx, null);
-             });
-  }
-
   function createTable() {
-    return executeTx('CREATE TABLE ' + tblName +
+    return executeTx('CREATE TABLE IF NOT EXISTS ' + tblName +
                      ' (' + tblKeyCol + ' unique, ' + tblValCol + ')');
   }
 
@@ -89,9 +79,8 @@
     supportedDfd.reject('openDatabase not defined!');
   } else {
     db = openDatabase(dbName, dbVersion, dbDesc, dbSize);
-    dropTable().then(createTable)
-               .done(supportedDfd.resolve)
-               .fail(supportedDfd.reject);
+    createTable().done(supportedDfd.resolve)
+                 .fail(supportedDfd.reject);
   }
 
   function executeTx(sql, paramArr) {
@@ -150,12 +139,16 @@
   }
 
   function setItem(key, value, cb) {
-    var func = partial(executeTx,
+    var deleteFunc = partial(executeTx,
+                       'DELETE FROM ' + tblName +
+                       ' WHERE ' + tblKeyCol + ' = ?',
+                       [ key ]),
+        insertFunc = partial(executeTx,
                        'INSERT INTO ' + tblName +
                        ' (' + tblKeyCol + ', ' + tblValCol + ') ' +
                        'VALUES (?, ?)',
                        [ key, value ]);
-    return supportedDfd.then(func);
+    return supportedDfd.then(deleteFunc).then(insertFunc);
   }
 
   function removeItem(key) {
