@@ -76,6 +76,20 @@ var startTests = function (lscacheWebsql) {
                  start ]);
   });
 
+  asyncTest('Testing set() (*2) and get() with string', function() {
+    var key = 'thekey',
+        value = 'thevalue',
+        value2 = 'thevalue2',
+        a = new Automator();
+
+    a.automate([ partial(lscacheWebsql.set, key, value, 1),
+                 100,
+                 partial(lscacheWebsql.set, key, value2, 1),
+                 partial(lscacheWebsql.get, key),
+                 partial(assertVal, value2),
+                 start ]);
+  });
+
   asyncTest('Testing set() with number value', function() {
     var key = 'numberkey',
         value = 2,

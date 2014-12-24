@@ -139,16 +139,12 @@
   }
 
   function setItem(key, value, cb) {
-    var deleteFunc = partial(executeTx,
-                       'DELETE FROM ' + tblName +
-                       ' WHERE ' + tblKeyCol + ' = ?',
-                       [ key ]),
-        insertFunc = partial(executeTx,
-                       'INSERT INTO ' + tblName +
+    var insertFunc = partial(executeTx,
+                       'INSERT OR REPLACE INTO ' + tblName +
                        ' (' + tblKeyCol + ', ' + tblValCol + ') ' +
                        'VALUES (?, ?)',
                        [ key, value ]);
-    return supportedDfd.then(deleteFunc).then(insertFunc);
+    return supportedDfd.then(insertFunc);
   }
 
   function removeItem(key) {
